@@ -1,0 +1,93 @@
+
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#17365D">
+<title>Mon Pointage</title>
+<style>
+body {
+  margin: 0; padding: 24px 18px;
+  font-family: Arial, sans-serif;
+  background: #f1f4f8; color: #17365D;
+}
+h1 { text-align: center; }
+#clock { text-align:center; font-size: 25px; margin: 20px 0; }
+.buttons { display: grid; gap: 14px; }
+button {
+  border: 0; border-radius: 14px; padding: 22px 10px;
+  font-size: 19px; font-weight: bold; color: white;
+  background: #17365D; cursor: pointer;
+}
+button:active { opacity: .75; }
+#status { text-align: center; min-height: 24px; margin: 15px 0; }
+h2 { margin-top: 28px; }
+.entry {
+  background: white; border-radius: 10px; padding: 12px;
+  margin: 8px 0; display:flex; justify-content:space-between;
+  gap: 8px; color: #222;
+}
+small { color: #666; }
+</style>
+</head>
+<body>
+<h1>Mon Pointage</h1>
+<div id="clock"></div>
+
+<div class="buttons">
+  <button onclick="pointer('Arrivée')">ARRIVÉE</button>
+  <button onclick="pointer('Début de pause')">DÉBUT DE PAUSE</button>
+  <button onclick="pointer('Reprise')">REPRISE</button>
+  <button onclick="pointer('Départ')">DÉPART</button>
+</div>
+
+<div id="status" role="status"></div>
+<h2>Historique des pointages</h2>
+<div id="history"></div>
+
+<script>
+const KEY = 'mon-pointage-historique-v1';
+let entries = JSON.parse(localStorage.getItem(KEY) || '[]');
+
+function updateClock() {
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString('fr-FR');
+}
+function pointer(type) {
+  const now = new Date();
+  entries.unshift({
+    type,
+    timestamp: now.toISOString(),
+    displayDate: now.toLocaleDateString('fr-FR'),
+    displayTime: now.toLocaleTimeString('fr-FR')
+  });
+  try {
+    localStorage.setItem(KEY, JSON.stringify(entries));
+    document.getElementById('status').textContent =
+      type + ' enregistré à ' + now.toLocaleTimeString('fr-FR');
+    render();
+  } catch (e) {
+    document.getElementById('status').textContent =
+      'Erreur de sauvegarde sur cet appareil.';
+  }
+}
+function render() {
+  document.getElementById('history').innerHTML = '';
+  entries.forEach((entry) => {
+    const row = document.createElement('div');
+    row.className = 'entry';
+    const label = document.createElement('strong');
+    label.textContent = entry.type;
+    const time = document.createElement('span');
+    time.textContent = entry.displayDate + ' à ' + entry.displayTime;
+    row.append(label, time);
+    document.getElementById('history').appendChild(row);
+  });
+}
+updateClock();
+setInterval(updateClock, 1000);
+render();
+</script>
+</body>
+</html>
