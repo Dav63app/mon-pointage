@@ -131,11 +131,16 @@
       data.forEach(p => {
         const li = document.createElement("li");
         const date = new Date(p.heure_pointage);
-        li.textContent = p.type_pointage + " — " +
-          date.toLocaleDateString("fr-FR") + " à " +
-          date.toLocaleTimeString("fr-FR", {
-            hour: "2-digit", minute: "2-digit", second: "2-digit"
-          });
+li.textContent = p.type_pointage + " — " +
+  date.toLocaleDateString("fr-FR", {
+    timeZone: "Europe/Paris"
+  }) + " à " +
+  date.toLocaleTimeString("fr-FR", {
+    timeZone: "Europe/Paris",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
         liste.appendChild(li);
       });
     }
