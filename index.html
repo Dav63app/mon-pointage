@@ -66,7 +66,30 @@
     <button data-type="Reprise" disabled>Reprise</button>
     <button class="depart" data-type="Départ" disabled>Départ</button>
   </section>
+<section class="panel">
+  <h2>Correction d'une journée</h2>
 
+  <input type="date" id="jourCorrection">
+
+  <label>Arrivée</label>
+  <input type="time" id="heureArrivee">
+
+  <label>Début de pause</label>
+  <input type="time" id="heurePause">
+
+  <label>Reprise</label>
+  <input type="time" id="heureReprise">
+
+  <label>Départ</label>
+  <input type="time" id="heureDepart">
+
+  <button id="creerJournee" disabled>
+    Créer la journée
+  </button>
+</section>
+
+
+  
   <section class="panel">
     <h2>Derniers pointages</h2>
     <button id="refresh" disabled>Actualiser</button>
