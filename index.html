@@ -97,13 +97,29 @@
     }
 
     function actualiserInterface() {
-      boutons.forEach(b => b.disabled = !utilisateur || operationEnCours);
-      refresh.disabled = !utilisateur || operationEnCours;
-      login.disabled = !!utilisateur || operationEnCours;
-      logout.hidden = !utilisateur;
-      document.getElementById("email").disabled = !!utilisateur;
-      document.getElementById("password").disabled = !!utilisateur;
-    }
+
+  boutons.forEach(b =>
+    b.disabled = !utilisateur || operationEnCours
+  );
+
+  refresh.disabled =
+    !utilisateur || operationEnCours;
+
+  creerJournee.disabled =
+    !utilisateur || operationEnCours;
+
+  login.disabled =
+    !!utilisateur || operationEnCours;
+
+  logout.hidden =
+    !utilisateur;
+
+  document.getElementById("email").disabled =
+    !!utilisateur;
+
+  document.getElementById("password").disabled =
+    !!utilisateur;
+}
 
     async function chargerPointages() {
       if (!utilisateur) return;
@@ -239,7 +255,99 @@ li.textContent = p.type_pointage + " — " +
         afficherMessage("Connecte-toi pour enregistrer tes pointages.");
       }
     }
+creerJournee.addEventListener("click", async () => {
 
+  if (!utilisateur) return;
+
+  const date =
+    document.getElementById("jourCorrection").value;
+
+  const arrivee =
+    document.getElementById("heureArrivee").value;
+
+  const pause =
+    document.getElementById("heurePause").value;
+
+  const reprise =
+    document.getElementById("heureReprise").value;
+
+  const depart =
+    document.getElementById("heureDepart").value;
+
+  if (!date) {
+    afficherMessage("Choisis une date.");
+    return;
+  }
+
+  const pointages = [];
+
+  function ajouter(type, heure) {
+
+    if (!heure) return;
+
+    pointages.push({
+      type_pointage: type,
+      heure_pointage: new Date(
+        `${date}T${heure}:00`
+      ).toISOString(),
+      user_id: utilisateur.id
+    });
+  }
+
+  ajouter("Arrivée", arrivee);
+  ajouter("Début de pause", pause);
+  ajouter("Reprise", reprise);
+  ajouter("Départ", depart);
+
+  if (pointages.length === 0) {
+    afficherMessage(
+      "Saisis au moins une heure."
+    );
+    return;
+  }
+
+  const confirmation = confirm(
+    `Créer ${pointages.length} pointage(s) pour le ${date} ?`
+  );
+
+  if (!confirmation) return;
+
+  operationEnCours = true;
+  actualiserInterface();
+
+  try {
+
+    const { error } = await client
+      .from("pointages")
+      .insert(pointages);
+
+    if (error) throw error;
+
+    document.getElementById("jourCorrection").value = "";
+    document.getElementById("heureArrivee").value = "";
+    document.getElementById("heurePause").value = "";
+    document.getElementById("heureReprise").value = "";
+    document.getElementById("heureDepart").value = "";
+
+    afficherMessage(
+      `${pointages.length} pointage(s) ajouté(s) avec succès.`
+    );
+
+    await chargerPointages();
+
+  } catch (e) {
+
+    afficherMessage(
+      "Erreur : " + texteErreur(e)
+    );
+
+  } finally {
+
+    operationEnCours = false;
+    actualiserInterface();
+  }
+
+});
     verifierSession();
   </script>
 </body>
