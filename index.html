@@ -191,593 +191,186 @@
   <p id="message" role="status">Chargement…</p>
 
   <script>
-    // ==== CALCUL (début) ====
-    // Règles du classeur Excel, reproduites à l'identique (voir le LISEZ-MOI). Fonctions pures, sans accès à la page.
-    const TYPES_POINTAGE = ["Arrivée", "Début de pause", "Reprise", "Départ"];
-    const FUSEAU = "Europe/Paris";
-    const formatParis = new Intl.DateTimeFormat("en-GB", {
-      timeZone: FUSEAU, hourCycle: "h23",
-      year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", second: "2-digit"
-    });
-
-    function deuxChiffres(n) { return String(n).padStart(2, "0"); }
-
-    function partiesParis(ms) {
-      const p = {};
-      for (const x of formatParis.formatToParts(new Date(ms))) {
-        if (x.type !== "literal") p[x.type] = parseInt(x.value, 10);
-      }
-      return p;
-    }
-
-    // Jour (AAAA-MM-JJ) et minutes depuis minuit, à l'heure de Paris, pour un instant donné.
-    function jourEtMinutesParis(ms) {
-      const p = partiesParis(ms);
-      return {
-        jour: p.year + "-" + deuxChiffres(p.month) + "-" + deuxChiffres(p.day),
-        minutes: p.hour * 60 + p.minute + p.second / 60
-      };
-    }
-
-    // Décalage de Paris par rapport à UTC (en minutes) à un instant donné : 60 en hiver, 120 en été.
-    function decalageParisMinutes(ms) {
-      const p = partiesParis(ms);
-      const localCommeUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
-      return Math.round((localCommeUtc - Math.floor(ms / 1000) * 1000) / 60000);
-    }
-
-    // Heure saisie à Paris -> instant UTC (en ms). Renvoie null si cette heure n'existe pas (passage à l'heure d'été).
-    // Si elle existe deux fois (passage à l'heure d'hiver), on retient la première.
-    function parisVersUtc(annee, mois, jour, heure, minute) {
-      const naif = Date.UTC(annee, mois - 1, jour, heure, minute);
-      for (const decalage of [120, 60]) {
-        const utc = naif - decalage * 60000;
-        if (decalageParisMinutes(utc) === decalage) return utc;
-      }
-      return null;
-    }
-
-    // Même règle que le script d'import : multiple le plus proche du pas, jamais 24:00.
-    function arrondir(minutes, pas) {
-      if (!(pas >= 1)) pas = 1;
-      let r = Math.floor(minutes / pas + 0.5) * pas;
-      if (r >= 1440) r = 1439;
-      return r;
-    }
-
-    function ajouterJours(jour, n) {
-      const [a, m, d] = jour.split("-").map(Number);
-      const dt = new Date(Date.UTC(a, m - 1, d + n));
-      return dt.getUTCFullYear() + "-" + deuxChiffres(dt.getUTCMonth() + 1) + "-" + deuxChiffres(dt.getUTCDate());
-    }
-
-    // 1 = lundi ... 7 = dimanche
-    function jourSemaineIso(jour) {
-      const [a, m, d] = jour.split("-").map(Number);
-      return (new Date(Date.UTC(a, m - 1, d)).getUTCDay() + 6) % 7 + 1;
-    }
-
-    function lundiDe(jour) { return ajouterJours(jour, -(jourSemaineIso(jour) - 1)); }
-
-    // Durée normale d'une journée (minutes) : 8 h, 7 h le vendredi, 0 le week-end.
-    function normeMinutes(jour) {
-      const j = jourSemaineIso(jour);
-      return j >= 6 ? 0 : (j === 5 ? 420 : 480);
-    }
-
-    // jour -> [arrivée, début de pause, reprise, départ] en minutes (premier pointage de chaque type, arrondi)
-    function regrouperParJour(pointages, pas) {
-      const tries = [...pointages].sort((a, b) => new Date(a.heure_pointage) - new Date(b.heure_pointage));
-      const jours = new Map();
-      for (const p of tries) {
-        const idx = TYPES_POINTAGE.indexOf(p.type_pointage);
-        if (idx < 0) continue;
-        const ms = new Date(p.heure_pointage).getTime();
-        if (Number.isNaN(ms)) continue;
-        const { jour, minutes } = jourEtMinutesParis(ms);
-        if (!jours.has(jour)) jours.set(jour, [null, null, null, null]);
-        const h = jours.get(jour);
-        if (h[idx] === null) h[idx] = arrondir(minutes, pas);
-      }
-      return jours;
-    }
-
-    // Colonne CONTRÔLE du classeur.
-    function statutJour(h) {
-      const B = h[0], C = h[1], D = h[2], E = h[3];
-      if (B === null || E === null) {
-        return "Manque : " + (B === null ? (E === null ? "arrivée et départ" : "arrivée") : "départ");
-      }
-      if ((C !== null || D !== null) && (C === null || D === null)) return "Pause incomplète";
-      if (E <= B || (C !== null && (C <= B || D <= C || E <= D))) return "Horaires incohérents";
-      return "OK";
-    }
-
-    // Colonnes « heures récupération » (F) et « récupération majorée » (G) du classeur, en minutes.
-    function calculerJours(pointages, pas) {
-      const regroupes = regrouperParJour(pointages, pas);
-      const jours = [...regroupes.keys()].sort().map(jour => {
-        const h = regroupes.get(jour);
-        const statut = statutJour(h);
-        let F = null;
-        if (statut === "OK") {
-          const travaille = (h[1] === null && h[2] === null) ? h[3] - h[0] : (h[1] - h[0]) + (h[3] - h[2]);
-          F = Math.max(0, travaille - normeMinutes(jour));
-        }
-        return { jour, h, statut, F, G: null, S: 0 };
-      });
-      for (const j of jours) {
-        if (j.F === null) continue;
-        const lundi = lundiDe(j.jour);
-        let S = 0;   // heures de récupération des jours précédents de la même semaine
-        for (const k of jours) if (k.F !== null && k.jour >= lundi && k.jour < j.jour) S += k.F;
-        j.S = S;
-        if (Math.round(j.F) !== 0) {
-          j.G = j.F * 1.25 + 0.25 * (Math.max(0, S + j.F - 240) - Math.max(0, S - 240));
-        }
-      }
-      return jours;
-    }
-
-    function formaterHeures(minutes) {
-      if (minutes === null || minutes === undefined) return "—";
-      const m = Math.floor(minutes + 0.5);
-      return Math.floor(m / 60) + "H" + deuxChiffres(m % 60);
-    }
-
-    // « 2 jour(s) et 3H05 » : même conversion que le classeur (une semaine de 39 h = 5 jours, sinon 8 h par jour).
-    function formaterJoursEtHeures(minutes) {
-      const M = Math.floor(minutes + 0.5);
-      const jours = Math.floor(M / 2340) * 5 + Math.floor((M % 2340) / 480);
-      const reste = (M % 2340) % 480;
-      return jours + " jour(s) et " + Math.floor(reste / 60) + "H" + deuxChiffres(M % 60);
-    }
-    // ==== CALCUL (fin) ====
-
-    // Mode appli : met la page en cache pour un démarrage rapide (les données, elles, viennent toujours du réseau).
-    if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => { navigator.serviceWorker.register("sw.js").catch(() => {}); });
-    }
-
-    // ================= A RENSEIGNER (Supabase > Project Settings > API) =================
-    // Project URL, par exemple : https://abcdefghijkl.supabase.co
-    const SUPABASE_URL = "https://lqcrugbojvzqecycewpo.supabase.co";
-    // Clé PUBLIQUE uniquement (publishable ou anon). JAMAIS la clé secrète / service_role.
+    // ==== CONFIGURATION SUPABASE ====
+    const SUPABASE_URL = "https://supabase.co";
     const SUPABASE_KEY = "sb_publishable_b9OnGO8ouGXRikIqmY6meg_cbDqD1rB";
-    // ====================================================================================
-
-    if (SUPABASE_URL.includes("COLLER_ICI") || SUPABASE_KEY.includes("COLLER_ICI")) {
-      document.getElementById("message").textContent =
-        "Application non configurée : renseigne SUPABASE_URL et SUPABASE_KEY dans le fichier index.html.";
-      throw new Error("Configuration Supabase manquante");
-    }
-    if (typeof supabase === "undefined") {
-      document.getElementById("message").textContent =
-        "Connexion internet nécessaire pour charger l'application. Réessaie une fois connecté.";
-      throw new Error("supabase-js non chargé");
-    }
-
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-    const $ = id => document.getElementById(id);
-    const message = $("message");
-    const boutons = document.querySelectorAll("[data-type]");
-    const liste = $("liste");
-    const login = $("login");
-    const logout = $("logout");
-    const refresh = $("refresh");
+    // ==== ELEMENTS DOM ====
+    const message = document.getElementById("message");
+    const boutonsPointage = document.querySelectorAll("section button[data-type]");
+    const liste = document.getElementById("liste");
+    const login = document.getElementById("login");
+    const logout = document.getElementById("logout");
+    const refresh = document.getElementById("refresh");
+    const ongletsContainer = document.getElementById("onglets");
+    const appliMain = document.getElementById("appli");
 
     let utilisateur = null;
     let operationEnCours = false;
-    let ongletActif = "pointage";
-    let pointagesComplets = null;   // tous les pointages, chargés à l'ouverture de l'onglet « Heures supp »
 
-    function afficherMessage(texte) {
-      message.textContent = texte;
-    }
-
-    function creer(balise, classe, texte) {
-      const e = document.createElement(balise);
-      if (classe) e.className = classe;
-      if (texte !== undefined) e.textContent = texte;
-      return e;
-    }
+    function afficherMessage(texte) { message.textContent = texte; }
 
     function actualiserInterface() {
-      const bloque = !utilisateur || operationEnCours;
-      boutons.forEach(b => b.disabled = bloque);
-      refresh.disabled = bloque;
-      $("oubli-ouvrir").disabled = bloque;
-      $("oubli-enregistrer").disabled = bloque;
-      $("heures-actualiser").disabled = bloque;
+      const bloqué = !utilisateur || operationEnCours;
+      boutonsPointage.forEach(b => b.disabled = bloqué);
+      refresh.disabled = bloqué;
+      document.getElementById("oubli-ouvrir").disabled = bloqué;
+      document.getElementById("heures-actualiser").disabled = bloqué;
       login.disabled = !!utilisateur || operationEnCours;
       logout.hidden = !utilisateur;
-      $("email").disabled = !!utilisateur;
-      $("password").disabled = !!utilisateur;
-      $("appli").hidden = !utilisateur;
-      $("onglets").hidden = !utilisateur;
+      ongletsContainer.hidden = !utilisateur;
+      appliMain.hidden = !utilisateur;
+      document.getElementById("email").disabled = !!utilisateur;
+      document.getElementById("password").disabled = !!utilisateur;
     }
 
-    // ---------- Onglets ----------
-    function choisirOnglet(nom) {
-      ongletActif = nom;
-      $("vue-pointage").hidden = nom !== "pointage";
-      $("vue-heures").hidden = nom !== "heures";
-      $("onglet-pointage").setAttribute("aria-selected", String(nom === "pointage"));
-      $("onglet-heures").setAttribute("aria-selected", String(nom === "heures"));
-      if (nom === "heures" && utilisateur && pointagesComplets === null) rafraichirHeures();
-    }
-    $("onglet-pointage").addEventListener("click", () => choisirOnglet("pointage"));
-    $("onglet-heures").addEventListener("click", () => choisirOnglet("heures"));
+    // ==== GESTION DES ONGLETS ====
+    const oPointage = document.getElementById("onglet-pointage");
+    const oHeures = document.getElementById("onglet-heures");
+    const vPointage = document.getElementById("vue-pointage");
+    const vHeures = document.getElementById("vue-heures");
 
-    // ---------- Derniers pointages ----------
-    function dateLisible(iso) {
-      const date = new Date(iso);
-      return date.toLocaleDateString("fr-FR", { timeZone: FUSEAU }) + " à " +
-        date.toLocaleTimeString("fr-FR", { timeZone: FUSEAU, hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    }
-
-    async function chargerPointages() {
-      if (!utilisateur) return;
-
-      const { data, error } = await client
-        .from("pointages")
-        .select("type_pointage, heure_pointage")
-        .order("heure_pointage", { ascending: false })
-        .limit(30);
-
-      if (error) {
-        afficherMessage("Erreur de lecture : " + error.message);
-        return;
-      }
-
-      liste.replaceChildren();
-
-      if (!data.length) {
-        liste.appendChild(creer("li", "", "Aucun pointage pour le moment."));
-        return;
-      }
-
-      data.forEach(p => {
-        liste.appendChild(creer("li", "", p.type_pointage + " — " + dateLisible(p.heure_pointage)));
-      });
-    }
-
-    // ---------- Connexion ----------
-    login.addEventListener("click", async () => {
-      const email = $("email").value.trim();
-      const password = $("password").value;
-
-      if (!email || !password) {
-        afficherMessage("Saisis ton adresse e-mail et ton mot de passe.");
-        return;
-      }
-
-      operationEnCours = true;
-      actualiserInterface();
-      afficherMessage("Connexion en cours…");
-
-      const { data, error } = await client.auth.signInWithPassword({
-        email, password
-      });
-
-      operationEnCours = false;
-
-      if (error) {
-        actualiserInterface();
-        afficherMessage("Connexion impossible : " + error.message);
-        return;
-      }
-
-      utilisateur = data.user;
-      pointagesComplets = null;
-      actualiserInterface();
-      afficherMessage("Connecté. Chargement des pointages…");
-      await chargerPointages();
-      afficherMessage("Connecté. Tu peux pointer.");
-    });
-
-    logout.addEventListener("click", async () => {
-      const { error } = await client.auth.signOut();
-      if (error) {
-        afficherMessage("Erreur de déconnexion : " + error.message);
-        return;
-      }
-      utilisateur = null;
-      pointagesComplets = null;
-      choisirOnglet("pointage");
-      actualiserInterface();
-      liste.replaceChildren();
-      $("semaines").replaceChildren();
-      afficherMessage("Tu es déconnecté.");
-    });
-
-    // ---------- Pointage (boutons) ----------
-    boutons.forEach(bouton => {
-      bouton.addEventListener("click", async () => {
-        if (!utilisateur || operationEnCours) return;
-
-        operationEnCours = true;
-        actualiserInterface();
-        afficherMessage("Enregistrement de « " + bouton.dataset.type + " »…");
-
-        // L'heure est prise au moment où tu appuies sur le bouton.
-        const heure = new Date().toISOString();
-
-        const { error } = await client.from("pointages").insert({
-          type_pointage: bouton.dataset.type,
-          heure_pointage: heure,
-          user_id: utilisateur.id
-        });
-
-        operationEnCours = false;
-        actualiserInterface();
-
-        if (error) {
-          afficherMessage("Pointage non enregistré : " + error.message);
-          return;
-        }
-
-        pointagesComplets = null;
-        afficherMessage("Pointage enregistré : " + bouton.dataset.type);
-        await chargerPointages();
-      });
-    });
-
-    refresh.addEventListener("click", chargerPointages);
-
-    // ---------- Pointage oublié ----------
-    function aujourdhuiParis() { return jourEtMinutesParis(Date.now()).jour; }
-
-    function ouvrirOubli(type, jour) {
-      choisirOnglet("pointage");
-      $("oubli-type").value = type || "Arrivée";
-      $("oubli-date").max = aujourdhuiParis();
-      $("oubli-date").value = jour || aujourdhuiParis();
-      $("oubli-heure").value = "";
-      $("oubli-formulaire").hidden = false;
-      $("oubli-heure").focus();
-      $("oubli-formulaire").scrollIntoView({ block: "center" });
-    }
-
-    $("oubli-ouvrir").addEventListener("click", () => ouvrirOubli());
-    $("oubli-annuler").addEventListener("click", () => { $("oubli-formulaire").hidden = true; });
-
-    $("oubli-enregistrer").addEventListener("click", async () => {
-      if (!utilisateur || operationEnCours) return;
-
-      const type = $("oubli-type").value;
-      const date = $("oubli-date").value;
-      const heure = $("oubli-heure").value;
-      if (!date || !heure) {
-        afficherMessage("Choisis la date et l'heure du pointage oublié.");
-        return;
-      }
-
-      const [annee, mois, jour] = date.split("-").map(Number);
-      const [h, mi] = heure.split(":").map(Number);
-      const instant = parisVersUtc(annee, mois, jour, h, mi);
-      if (instant === null) {
-        afficherMessage("Cette heure n'existe pas (passage à l'heure d'été). Choisis-en une autre.");
-        return;
-      }
-      if (instant > Date.now() + 2 * 60000) {
-        afficherMessage("Cette date et cette heure sont dans le futur.");
-        return;
-      }
-
-      operationEnCours = true;
-      actualiserInterface();
-      afficherMessage("Vérification…");
-
-      try {
-        // Un pointage de ce type existe-t-il déjà ce jour-là (heure de Paris) ?
-        const suivant = ajouterJours(date, 1).split("-").map(Number);
-        const debutJour = parisVersUtc(annee, mois, jour, 0, 0);
-        const finJour = parisVersUtc(suivant[0], suivant[1], suivant[2], 0, 0);
-        const { data: existants, error: erreurLecture } = await client
-          .from("pointages")
-          .select("heure_pointage")
-          .eq("type_pointage", type)
-          .gte("heure_pointage", new Date(debutJour).toISOString())
-          .lt("heure_pointage", new Date(finJour).toISOString());
-        if (erreurLecture) throw erreurLecture;
-
-        if (existants.length) {
-          const deja = new Date(existants[0].heure_pointage).toLocaleTimeString("fr-FR", { timeZone: FUSEAU, hour: "2-digit", minute: "2-digit" });
-          const suite = window.confirm(
-            "Un pointage « " + type + " » existe déjà ce jour-là (" + deja + ").\n" +
-            "L'import Excel ne retient que le premier de chaque type.\n\nL'ajouter quand même ?");
-          if (!suite) {
-            afficherMessage("Pointage oublié non enregistré.");
-            return;
-          }
-        }
-
-        afficherMessage("Enregistrement de « " + type + " »…");
-        const { error } = await client.from("pointages").insert({
-          type_pointage: type,
-          heure_pointage: new Date(instant).toISOString(),
-          user_id: utilisateur.id
-        });
-        if (error) throw error;
-
-        $("oubli-formulaire").hidden = true;
-        pointagesComplets = null;
-        afficherMessage("Pointage oublié enregistré : " + type + " le " +
-          jour.toString().padStart(2, "0") + "/" + deuxChiffres(mois) + "/" + annee + " à " + deuxChiffres(h) + ":" + deuxChiffres(mi));
-        await chargerPointages();
-        if (ongletActif === "heures") await rafraichirHeures();
-      } catch (e) {
-        afficherMessage("Pointage non enregistré : " + (e && e.message ? e.message : e));
-      } finally {
-        operationEnCours = false;
-        actualiserInterface();
-      }
-    });
-
-    // ---------- Heures supplémentaires ----------
-    async function chargerTousLesPointages() {
-      const tout = [];
-      const taille = 1000;
-      for (let debut = 0; ; debut += taille) {
-        const { data, error } = await client
-          .from("pointages")
-          .select("type_pointage, heure_pointage")
-          .order("heure_pointage", { ascending: true })
-          .range(debut, debut + taille - 1);
-        if (error) throw error;
-        tout.push(...data);
-        if (data.length < taille) break;
-      }
-      return tout;
-    }
-
-    async function rafraichirHeures() {
-      if (!utilisateur) return;
-      operationEnCours = true;
-      actualiserInterface();
-      afficherMessage("Chargement des pointages…");
-      try {
-        pointagesComplets = await chargerTousLesPointages();
-        afficherHeures();
-        afficherMessage("Heures supplémentaires à jour (" + pointagesComplets.length + " pointage(s)).");
-      } catch (e) {
-        afficherMessage("Erreur de lecture : " + (e && e.message ? e.message : e));
-      } finally {
-        operationEnCours = false;
-        actualiserInterface();
-      }
-    }
-
-    function nomMois(cle) {
-      const [a, m] = cle.split("-").map(Number);
-      return new Date(Date.UTC(a, m - 1, 1)).toLocaleDateString("fr-FR", { month: "long", year: "numeric", timeZone: "UTC" });
-    }
-
-    function jourLisible(jour) {
-      const [a, m, d] = jour.split("-").map(Number);
-      return new Date(Date.UTC(a, m - 1, d)).toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit", month: "2-digit", timeZone: "UTC" });
-    }
-
-    function courtJour(jour) { return jour.slice(8, 10) + "/" + jour.slice(5, 7); }
-
-    function typeASaisir(h) {
-      if (h[0] === null) return "Arrivée";
-      if (h[1] !== null && h[2] === null) return "Reprise";
-      if (h[1] === null && h[2] !== null) return "Début de pause";
-      return "Départ";
-    }
-
-    function afficherHeures() {
-      if (pointagesComplets === null) return;
-      const pas = parseInt($("arrondi").value, 10);
-      const tous = calculerJours(pointagesComplets, pas);
-
-      // Liste des périodes (mois présents), en conservant le choix courant
-      const choix = $("periode").value;
-      const mois = [...new Set(tous.map(j => j.jour.slice(0, 7)))].sort().reverse();
-      const selecteur = $("periode");
-      selecteur.replaceChildren(new Option("Tout", "tout"));
-      mois.forEach(m => selecteur.appendChild(new Option(nomMois(m), m)));
-      selecteur.value = (choix === "tout" || mois.includes(choix)) ? choix : "tout";
-
-      const visibles = tous.filter(j => selecteur.value === "tout" || j.jour.startsWith(selecteur.value));
-
-      let totalF = 0, totalG = 0;
-      visibles.forEach(j => { if (j.F !== null) totalF += j.F; if (j.G !== null) totalG += j.G; });
-      $("total-recup").textContent = formaterHeures(totalF);
-      $("total-recup-jours").textContent = formaterJoursEtHeures(totalF);
-      $("total-majoree").textContent = formaterHeures(totalG);
-      $("total-majoree-jours").textContent = formaterJoursEtHeures(totalG);
-
-      const conteneur = $("semaines");
-      conteneur.replaceChildren();
-      if (!visibles.length) {
-        conteneur.appendChild(creer("p", "vide", "Aucun pointage sur cette période."));
-        return;
-      }
-
-      // Semaines (lundi à dimanche), la plus récente en premier
-      const semaines = new Map();
-      visibles.forEach(j => {
-        const lundi = lundiDe(j.jour);
-        if (!semaines.has(lundi)) semaines.set(lundi, []);
-        semaines.get(lundi).push(j);
-      });
-
-      [...semaines.keys()].sort().reverse().forEach(lundi => {
-        const jours = semaines.get(lundi);
-        let f = 0, g = 0;
-        jours.forEach(j => { if (j.F !== null) f += j.F; if (j.G !== null) g += j.G; });
-
-        const carte = creer("section", "semaine");
-        const tete = creer("div", "semaine-tete");
-        tete.appendChild(creer("span", "", "Semaine du " + courtJour(lundi) + " au " + courtJour(ajouterJours(lundi, 6))));
-        tete.appendChild(creer("span", "", formaterHeures(f) + " · majorée " + formaterHeures(g)));
-        carte.appendChild(tete);
-
-        [...jours].sort((a, b) => (a.jour < b.jour ? 1 : -1)).forEach(j => {
-          const ligne = creer("div", "jour");
-          const haut = creer("div", "jour-tete");
-          haut.appendChild(creer("span", "", jourLisible(j.jour)));
-          haut.appendChild(creer("span", "", j.F === null ? "—" : (j.F === 0 ? "0H00" : "+" + formaterHeures(j.F))));
-          ligne.appendChild(haut);
-
-          const h = j.h;
-          const morceaux = [];
-          if (h[0] !== null) morceaux.push(formaterHeures(h[0]));
-          if (h[1] !== null) morceaux.push("pause " + formaterHeures(h[1]));
-          if (h[2] !== null) morceaux.push("reprise " + formaterHeures(h[2]));
-          if (h[3] !== null) morceaux.push(formaterHeures(h[3]));
-          ligne.appendChild(creer("div", "jour-detail", morceaux.join(" → ") + (j.G !== null ? "  ·  majorée " + formaterHeures(j.G) : "")));
-
-          if (j.statut !== "OK") {
-            ligne.appendChild(creer("div", "alerte", j.statut + " : non compté"));
-            const bouton = creer("button", "petit", "Compléter");
-            bouton.addEventListener("click", () => ouvrirOubli(typeASaisir(h), j.jour));
-            ligne.appendChild(bouton);
-          }
-          carte.appendChild(ligne);
-        });
-        conteneur.appendChild(carte);
-      });
-    }
-
-    // Réglage de l'arrondi, mémorisé sur ce téléphone
-    try {
-      const memorise = localStorage.getItem("arrondiMinutes");
-      if (memorise && ["60", "30", "15", "1"].includes(memorise)) $("arrondi").value = memorise;
-    } catch (e) { }
-    $("arrondi").addEventListener("change", () => {
-      try { localStorage.setItem("arrondiMinutes", $("arrondi").value); } catch (e) { }
-      afficherHeures();
-    });
-    $("periode").addEventListener("change", afficherHeures);
-    $("heures-actualiser").addEventListener("click", rafraichirHeures);
-
-    // ---------- Démarrage ----------
-    async function verifierSession() {
-      const { data, error } = await client.auth.getSession();
-
-      if (error) {
-        afficherMessage("Erreur de session : " + error.message);
-        return;
-      }
-
-      utilisateur = data.session ? data.session.user : null;
-      actualiserInterface();
-
-      if (utilisateur) {
-        await chargerPointages();
-        afficherMessage("Connecté. Tu peux pointer.");
+    function basculerOnglet(cible) {
+      if (cible === "pointage") {
+        oPointage.setAttribute("aria-selected", "true");
+        oHeures.setAttribute("aria-selected", "false");
+        vPointage.hidden = false;
+        vHeures.hidden = true;
       } else {
-        afficherMessage("Connecte-toi pour enregistrer tes pointages.");
+        oPointage.setAttribute("aria-selected", "false");
+        oHeures.setAttribute("aria-selected", "true");
+        vPointage.hidden = true;
+        vHeures.hidden = false;
       }
     }
+    oPointage.addEventListener("click", () => basculerOnglet("pointage"));
+    oHeures.addEventListener("click", () => basculerOnglet("heures"));
 
-    verifierSession();
-  </script>
-</body>
-</html>
+// ==== CHARGEMENT DES POINTAGES ====
+async function chargerPointages() {
+if (!utilisateur) return;
+const { data, error } = await client
+.from("pointages")
+.select("type_pointage, heure_pointage")
+.order("heure_pointage", { ascending: false })
+.limit(30);
+if (error) { afficherMessage("Erreur de lecture : " + error.message); return; }
+liste.replaceChildren();
+if (!data.length) {
+const li = document.createElement("li");
+li.textContent = "Aucun pointage pour le moment.";
+liste.appendChild(li);
+return;
+}
+data.forEach(p => {
+const li = document.createElement("li");
+const date = new Date(p.heure_pointage);
+li.textContent = p.type_pointage + " — " + date.toLocaleDateString("fr-FR", { timeZone: "Europe/Paris" }) + " à " + date.toLocaleTimeString("fr-FR", { timeZone: "Europe/Paris", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+liste.appendChild(li);
+});
+}
+// ==== EVENEMENTS CONNEXION ====
+login.addEventListener("click", async () => {
+const email = document.getElementById("email").value.trim();
+const password = document.getElementById("password").value;
+if (!email || !password) { afficherMessage("Saisis ton adresse e-mail et ton mot de passe."); return; }
+operationEnCours = true;
+actualiserInterface();
+afficherMessage("Connexion en cours…");
+const { data, error } = await client.auth.signInWithPassword({ email, password });
+operationEnCours = false;
+if (error) { actualiserInterface(); afficherMessage("Connexion impossible : " + error.message); return; }
+utilisateur = data.user;
+actualiserInterface();
+await chargerPointages();
+afficherMessage("Connecté. Tu peux pointer.");
+});
+logout.addEventListener("click", async () => {
+const { error } = await client.auth.signOut();
+if (error) { afficherMessage("Erreur de déconnexion : " + error.message); return; }
+utilisateur = null;
+actualiserInterface();
+liste.replaceChildren();
+afficherMessage("Tu es déconnecté.");
+});
+// ==== POINTAGE DIRECT (AVEC CONFIRMATION RAJOUTÉE) ====
+boutonsPointage.forEach(bouton => {
+bouton.addEventListener("click", async () => {
+if (!utilisateur || operationEnCours) return;
+// SÉCURITÉ : Demande de confirmation mécanique identique à la création de journée
+const confirmation = confirm(Confirmer l'enregistrement de l'action : « ${bouton.dataset.type} » ?);
+if (!confirmation) return;
+operationEnCours = true;
+actualiserInterface();
+afficherMessage("Enregistrement de « " + bouton.dataset.type + " »…");
+const heure = new Date().toISOString();
+const { error } = await client.from("pointages").insert({
+type_pointage: bouton.dataset.type,
+heure_pointage: heure,
+user_id: utilisateur.id
+});
+operationEnCours = false;
+actualiserInterface();
+if (error) { afficherMessage("Pointage non enregistré : " + error.message); return; }
+afficherMessage("Pointage enregistré : " + bouton.dataset.type);
+await chargerPointages();
+});
+});
+refresh.addEventListener("click", chargerPointages);
+// ==== FORMULAIRE POINTAGE OUBLIÉ ====
+const fOubliForm = document.getElementById("oubli-formulaire");
+const bOubliOuvrir = document.getElementById("oubli-ouvrir");
+bOubliOuvrir.addEventListener("click", () => {
+fOubliForm.hidden = false;
+bOubliOuvrir.hidden = true;
+});
+document.getElementById("oubli-annuler").addEventListener("click", () => {
+fOubliForm.hidden = true;
+bOubliOuvrir.hidden = false;
+});
+document.getElementById("oubli-enregistrer").addEventListener("click", async () => {
+if (!utilisateur || operationEnCours) return;
+const type = document.getElementById("oubli-type").value;
+const date = document.getElementById("oubli-date").value;
+const heure = document.getElementById("oubli-heure").value;
+if (!date || !heure) { afficherMessage("Saisis une date et une heure valides."); return; }
+const confirmation = confirm(Ajouter un pointage oublié « ${type} » pour le ${date} à ${heure} ?);
+if (!confirmation) return;
+operationEnCours = true;
+actualiserInterface();
+try {
+const isoString = new Date(${date}T${heure}:00).toISOString();
+const { error } = await client.from("pointages").insert({
+type_pointage: type,
+heure_pointage: isoString,
+user_id: utilisateur.id
+});
+if (error) throw error;
+document.getElementById("oubli-date").value = "";
+document.getElementById("oubli-heure").value = "";
+fOubliForm.hidden = true;
+bOubliOuvrir.hidden = false;
+afficherMessage("Pointage oublié enregistré.");
+await chargerPointages();
+} catch (e) {
+afficherMessage("Erreur : " + e.message);
+} finally {
+operationEnCours = false;
+actualiserInterface();
+}
+});
+// ==== INITIALISATION SESSION ====
+async function verifierSession() {
+const { data, error } = await client.auth.getSession();
+if (error) { afficherMessage("Erreur de session : " + error.message); return; }
+utilisateur = data.session ? data.session.user : null;
+actualiserInterface();
+if (utilisateur) {
+await chargerPointages();
+afficherMessage("Connecté. Tu peux pointer.");
+} else {
+afficherMessage("Connecte-toi pour enregistrer tes pointages.");
+}
+}
+verifierSession();
