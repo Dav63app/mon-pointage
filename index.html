@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#17365d">
   <title>Mon pointage</title>
-  <script src="https://jsdelivr.net"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -46,7 +46,7 @@
   </style>
 </head>
 <body>
-  <h1>Mon pointage</h1>
+  <h1>Pointage DAVID</h1>
 
   <section class="panel" id="connexion">
     <h2>Connexion</h2>
@@ -68,55 +68,40 @@
 
   <section class="panel">
     <h2>Correction d'une journée</h2>
+
     <input type="date" id="jourCorrection">
+
     <label>Arrivée</label>
     <input type="time" id="heureArrivee">
+
     <label>Début de pause</label>
     <input type="time" id="heurePause">
+
     <label>Reprise</label>
     <input type="time" id="heureReprise">
+
     <label>Départ</label>
     <input type="time" id="heureDepart">
+
     <button id="creerJournee" disabled>
       Créer la journée
     </button>
   </section>
-
+  
   <section class="panel">
     <h2>Derniers pointages</h2>
     <button id="refresh" disabled>Actualiser</button>
     <ul id="liste"></ul>
   </section>
 
-  <p id="message" role="status">Chargement…</p>
-  <p><small id="infos"></small></p>
+  <p id="message" role="status">Configure la connexion Supabase dans le code.</p>
 
   <script>
-    // ================= A RENSEIGNER (Supabase > Project Settings > API) =================
-    const SUPABASE_URL = "COLLER_ICI_URL_DU_PROJET";
-    const SUPABASE_KEY = "COLLER_ICI_CLE_PUBLIQUE";
-    // ====================================================================================
+    // Remplace ces deux valeurs par celles de TON projet Supabase.
+    const SUPABASE_URL = "https://lqcrugbojvzqecycewpo.supabase.co";
+    const SUPABASE_KEY = "sb_publishable_b9OnGO8ouGXRikIqmY6meg_cbDqD1rB";
 
-    if (SUPABASE_URL.includes("COLLER_ICI") || SUPABASE_KEY.includes("COLLER_ICI")) {
-      document.getElementById("message").textContent =
-        "Application non configurée : renseigne SUPABASE_URL et SUPABASE_KEY dans le fichier index.html.";
-      throw new Error("Configuration Supabase manquante");
-    }
-
-    if (typeof supabase === "undefined") {
-      document.getElementById("message").textContent =
-        "Impossible de charger la bibliothèque Supabase (pas de connexion internet, ou bloqueur de publicités). Recharge la page.";
-      throw new Error("Bibliothèque Supabase introuvable");
-    }
-
-    let hoteProjet = SUPABASE_URL;
-    try { hoteProjet = new URL(SUPABASE_URL).host; } catch (e) { }
-    document.getElementById("infos").textContent = "Projet : " + hoteProjet;
-
-    const options = (location.protocol === "file:")
-      ? { auth: { lock: async (nom, delai, tache) => await tache() } }
-      : {};
-    const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, options);
+    const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
     const message = document.getElementById("message");
     const boutons = document.querySelectorAll("[data-type]");
@@ -124,7 +109,7 @@
     const login = document.getElementById("login");
     const logout = document.getElementById("logout");
     const refresh = document.getElementById("refresh");
-    const icreerJournee = document.getElementById("creerJournee");
+    const creerJournee = document.getElementById("creerJournee");
 
     let utilisateur = null;
     let operationEnCours = false;
@@ -133,46 +118,41 @@
       message.textContent = texte;
     }
 
-    function aideAdresse() {
-      return (location.protocol === "file:")
-        ? "\n(La page est ouverte depuis un fichier de ton PC : ouvre-la plutôt par son adresse GitHub, qui commence par https://)"
-        : "";
-    }
-
-    function texteErreur(e) {
-      return (e && e.message) ? e.message : String(e);
-    }
-
-    window.addEventListener("unhandledrejection", e => {
-      afficherMessage("Erreur inattendue : " + texteErreur(e.reason) + aideAdresse());
-    });
-
     function actualiserInterface() {
-      boutons.forEach(b => b.disabled = !utilisateur || operationEnCours);
-      refresh.disabled = !utilisateur || operationEnCours;
-      if (icreerJournee) icreerJournee.disabled = !utilisateur || operationEnCours;
-      login.disabled = !!utilisateur || operationEnCours;
-      logout.hidden = !utilisateur;
-      document.getElementById("email").disabled = !!utilisateur;
-      document.getElementById("password").disabled = !!utilisateur;
+      boutons.forEach(b =>
+        b.disabled = !utilisateur || operationEnCours
+      );
+
+      refresh.disabled =
+        !utilisateur || operationEnCours;
+
+      creerJournee.disabled =
+        !utilisateur || operationEnCours;
+
+      login.disabled =
+        !!utilisateur || operationEnCours;
+
+      logout.hidden =
+        !utilisateur;
+
+      document.getElementById("email").disabled =
+        !!utilisateur;
+
+      document.getElementById("password").disabled =
+        !!utilisateur;
     }
 
     async function chargerPointages() {
       if (!utilisateur) return;
 
-      let data, error;
-      try {
-        ({ data, error } = await client
-          .from("pointages")
-          .select("type_pointage, heure_pointage")
-          .order("heure_pointage", { ascending: false })
-          .limit(30));
-      } catch (e) {
-        error = e;
-      }
+      const { data, error } = await client
+        .from("pointages")
+        .select("type_pointage, heure_pointage")
+        .order("heure_pointage", { ascending: false })
+        .limit(30);
 
       if (error) {
-        afficherMessage("Erreur de lecture : " + texteErreur(error) + aideAdresse());
+        afficherMessage("Erreur de lecture : " + error.message);
         return;
       }
 
@@ -215,20 +195,15 @@
       actualiserInterface();
       afficherMessage("Connexion en cours…");
 
-      let data, error;
-      try {
-        ({ data, error } = await client.auth.signInWithPassword({
-          email, password
-        }));
-      } catch (e) {
-        error = e;
-      }
+      const { data, error } = await client.auth.signInWithPassword({
+        email, password
+      });
 
       operationEnCours = false;
 
       if (error) {
         actualiserInterface();
-        afficherMessage("Connexion impossible : " + texteErreur(error) + aideAdresse());
+        afficherMessage("Connexion impossible : " + error.message);
         return;
       }
 
@@ -240,10 +215,9 @@
     });
 
     logout.addEventListener("click", async () => {
-      let error = null;
-      try { ({ error } = await client.auth.signOut()); } catch (e) { error = e; }
+      const { error } = await client.auth.signOut();
       if (error) {
-        afficherMessage("Erreur de déconnexion : " + texteErreur(error));
+        afficherMessage("Erreur de déconnexion : " + error.message);
         return;
       }
       utilisateur = null;
@@ -256,36 +230,34 @@
       bouton.addEventListener("click", async () => {
         if (!utilisateur || operationEnCours) return;
 
-        // Fenêtre de confirmation ajoutée ici
-        const confirmation = confirm(`Confirmer le pointage : « ${bouton.dataset.type} » ?`);
+        const typePointage = bouton.dataset.type;
+
+        // Demande de confirmation avant d'enregistrer
+        const confirmation = confirm(`Confirmer le pointage : "${typePointage}" maintenant ?`);
         if (!confirmation) return;
 
         operationEnCours = true;
         actualiserInterface();
-        afficherMessage("Enregistrement de « " + bouton.dataset.type + " »…");
+        afficherMessage("Enregistrement de « " + typePointage + " »…");
 
+        // L'heure est prise au moment où tu appuies sur le bouton (après la confirmation).
         const heure = new Date().toISOString();
 
-        let error = null;
-        try {
-          ({ error } = await client.from("pointages").insert({
-            type_pointage: bouton.dataset.type,
-            heure_pointage: heure,
-            user_id: utilisateur.id
-          }));
-        } catch (e) {
-          error = e;
-        }
+        const { error } = await client.from("pointages").insert({
+          type_pointage: typePointage,
+          heure_pointage: heure,
+          user_id: utilisateur.id
+        });
 
         operationEnCours = false;
         actualiserInterface();
 
         if (error) {
-          afficherMessage("Pointage non enregistré : " + texteErreur(error) + aideAdresse());
+          afficherMessage("Pointage non enregistré : " + error.message);
           return;
         }
 
-        afficherMessage("Pointage enregistré : " + bouton.dataset.type);
+        afficherMessage("Pointage enregistré : " + typePointage);
         await chargerPointages();
       });
     });
@@ -293,16 +265,10 @@
     refresh.addEventListener("click", chargerPointages);
 
     async function verifierSession() {
-      let data, error;
-      try {
-        ({ data, error } = await client.auth.getSession());
-      } catch (e) {
-        error = e;
-      }
+      const { data, error } = await client.auth.getSession();
 
       if (error) {
-        actualiserInterface();
-        afficherMessage("Erreur de session : " + texteErreur(error) + aideAdresse());
+        afficherMessage("Erreur de session : " + error.message);
         return;
       }
 
@@ -316,6 +282,71 @@
         afficherMessage("Connecte-toi pour enregistrer tes pointages.");
       }
     }
+
+    creerJournee.addEventListener("click", async () => {
+      if (!utilisateur) return;
+
+      const date = document.getElementById("jourCorrection").value;
+      const arrivee = document.getElementById("heureArrivee").value;
+      const pause = document.getElementById("heurePause").value;
+      const reprise = document.getElementById("heureReprise").value;
+      const depart = document.getElementById("heureDepart").value;
+
+      if (!date) {
+        afficherMessage("Choisis une date.");
+        return;
+      }
+
+      const pointages = [];
+
+      function ajouter(type, heure) {
+        if (!heure) return;
+        pointages.push({
+          type_pointage: type,
+          heure_pointage: new Date(`${date}T${heure}:00`).toISOString(),
+          user_id: utilisateur.id
+        });
+      }
+
+      ajouter("Arrivée", arrivee);
+      ajouter("Début de pause", pause);
+      ajouter("Reprise", reprise);
+      ajouter("Départ", depart);
+
+      if (pointages.length === 0) {
+        afficherMessage("Saisis au moins une heure.");
+        return;
+      }
+
+      const confirmation = confirm(`Créer ${pointages.length} pointage(s) pour le ${date} ?`);
+      if (!confirmation) return;
+
+      operationEnCours = true;
+      actualiserInterface();
+
+      try {
+        const { error } = await client
+          .from("pointages")
+          .insert(pointages);
+
+        if (error) throw error;
+
+        document.getElementById("jourCorrection").value = "";
+        document.getElementById("heureArrivee").value = "";
+        document.getElementById("heurePause").value = "";
+        document.getElementById("heureReprise").value = "";
+        document.getElementById("heureDepart").value = "";
+
+        afficherMessage(`${pointages.length} pointage(s) ajouté(s) avec succès.`);
+        await chargerPointages();
+
+      } catch (e) {
+        afficherMessage("Erreur : " + e.message);
+      } finally {
+        operationEnCours = false;
+        actualiserInterface();
+      }
+    });
 
     verifierSession();
   </script>
